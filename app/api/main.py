@@ -1,4 +1,3 @@
-import uvicorn
 from fastapi import FastAPI
 from fastapi_mqtt import FastMQTT, MQTTConfig
 from pydantic import BaseModel
@@ -31,12 +30,12 @@ mqtt.init_app(app)
 
 @mqtt.on_connect()
 def connect(client, flags, rc, properties):
-    mqtt.client.subscribe("/mqtt/toModel/#") # subscribing mqtt topic wildcard- multi-level
+    mqtt.client.subscribe("/mqtt") # subscribing mqtt topic wildcard- multi-level
     print("connected: ", client, flags, rc, properties)
 
 @mqtt.on_message()
 async def message(client, topic, payload, qos, properties):
-    print("received message: ", topic, jsonpickle.decode(payload.decode()), qos, properties)
+    print("received message: ", topic, payload, qos, properties)
     return 0 
 
 
@@ -59,7 +58,3 @@ async def scan_host_port(nmap_details : Nmap):
     print(type(nmap_details))
     mqtt.client.publish("/mqtt/fromModel/nmap", jsonpickle.encode(nmap_details)) 
     return results
-
-
-if __name__ == '__main__':
-	uvicorn.run(app, port=8080, host="0.0.0.0")
