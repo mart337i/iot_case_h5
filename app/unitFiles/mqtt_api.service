@@ -1,0 +1,13 @@
+[Unit]
+Description=embeded service
+After=multi-user.target
+
+[Service]
+StartLimitBurst=0
+Type=simple
+Restart=on-failure
+StartLimitIntervalSec=10
+ExecStart=/bin/bash -c 'cd /home/sysadmin/code/iot_case_h5/app/api && source .venv/bin/activate && uvicorn main:app'
+
+[Install]
+WantedBy=multi-user.target
