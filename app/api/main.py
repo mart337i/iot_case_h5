@@ -1,3 +1,4 @@
+import uvicorn
 from fastapi import FastAPI
 from fastapi_mqtt import FastMQTT, MQTTConfig
 from pydantic import BaseModel
@@ -58,3 +59,7 @@ async def scan_host_port(nmap_details : Nmap):
     print(type(nmap_details))
     mqtt.client.publish("/mqtt/fromModel/nmap", jsonpickle.encode(nmap_details)) 
     return results
+
+
+if __name__ == '__main__':
+	uvicorn.run(app, port=8080, host="0.0.0.0")
