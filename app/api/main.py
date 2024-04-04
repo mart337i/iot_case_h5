@@ -12,7 +12,7 @@ class Nmap(BaseModel):
     portRange: str
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example" : {
                 "host": "10.0.2.15",
                  "portRange": "22-80",
