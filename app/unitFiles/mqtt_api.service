@@ -7,7 +7,7 @@ StartLimitBurst=0
 Type=simple
 Restart=on-failure
 StartLimitIntervalSec=10
-ExecStart=/bin/bash -c 'cd /home/sysadmin/code/iot_case_h5/app/api && source .venv/bin/activate && uvicorn main:app'
+ExecStart=/home/sysadmin/code/iot_case_h5/app/api/gunicorn
 
 [Install]
 WantedBy=multi-user.target
