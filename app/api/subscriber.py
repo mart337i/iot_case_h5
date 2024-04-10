@@ -1,13 +1,38 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi_mqtt import FastMQTT, MQTTConfig
-from pydantic import BaseModel
+from fastapi.responses import HTMLResponse
 import jsonpickle
 from ipaddress import IPv4Address
+from sqlmodel import Session,SQLModel
 
-app = FastAPI()
+from models.monitoring import Alarm,Device,Sensor,Employe,KeyFob,EntryLog,ValueType,Reading
+
+from database import engine
+import logging
+
+#Add the base logging config 
+logging.basicConfig(filename='/home/sysadmin/code/iot_case_h5/app/logs/application.log',  # log to a file named 'app.log'
+                    filemode='a',  # append to the log file if it exists, otherwise create it
+                    level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s',
+                    datefmt='%Y-%m-%d %H:%M:%S')
+
+#get the logger with the newly set config
+_logger = logging.getLogger(__name__)
+
+#Application 
+app = FastAPI(root_path="/api",docs_url="/docs", redoc_url="/redoc")
+
+#Database Orm create engine
+SQLModel.metadata.create_all(engine)
 
 
-class Nmap(BaseModel):
+def get_session():
+    with Session(engine) as session:
+        yield session
+
+
+class Nmap(SQLModel):
     host: IPv4Address
     portRange: str
 
@@ -21,6 +46,42 @@ class Nmap(BaseModel):
         }
 
 
+# ------------------------------------------------------------ HTTP
+
+@app.get("/api",response_class=HTMLResponse)
+async def entry():
+    return """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Greenhouse API</title>
+                <!-- Include Bootstrap CSS from CDN -->
+                <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+            </head>
+            <body class="bg-light">
+                <div class="container py-5">
+                    <h1 class="display-4 text-center mb-3">Welcome to the Greenhouse Temperature and Humidity API</h1>
+                    <p class="lead text-center mb-5">Use the links below to navigate to the API documentation:</p>
+                    <div class="row">
+                        <div class="col-md-6 text-center mb-3">
+                            <a href="/api/docs" class="btn btn-primary btn-lg">Swagger UI Documentation</a>
+                        </div>
+                        <div class="col-md-6 text-center mb-3">
+                            <a href="/api/redoc" class="btn btn-secondary btn-lg">ReDoc Documentation</a>
+                        </div>
+                    </div>
+                </div>
+                <!-- jQuery first, then Popper.js, then Bootstrap JS -->
+                <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+                <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.9.2/dist/umd/popper.min.js"></script>
+                <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+            </body>
+            </html>
+
+    """
+
+
+# ------------------------------------------------------------ MQTT
 
 mqtt_config = MQTTConfig()
 

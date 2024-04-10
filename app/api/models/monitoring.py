@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional
 from uuid import UUID
 
@@ -14,8 +14,7 @@ from sqlalchemy.dialects.postgresql import UUID as UUIDSA
 #---------------------------------------
 
 class Alarm(SQLModel, table=True):
-    __tablename__ = "alarms"
-    __table_args__ = {'extend_existing': True}
+    __tablename__ = "alarm"
     id: Optional[int] = Field(default=None, primary_key=True)
     sensor_id: int
     message: str
@@ -37,7 +36,7 @@ class Alarm(SQLModel, table=True):
     )
 
 class Device(SQLModel, table=True):
-    __tablename__ = "devicees"
+    __tablename__ = "device"
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str
 
@@ -55,9 +54,9 @@ class Device(SQLModel, table=True):
     )
 
 class Sensor(SQLModel, table=True):
-    __tablename__ = "sensors"
+    __tablename__ = "sensor"
     id: Optional[int] = Field(default=None, primary_key=True)
-    device_id: int
+    device_id : int | None = Field(default=None, foreign_key="device.id")
     name: str
 
     created_at: Optional[datetime] = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
@@ -74,11 +73,11 @@ class Sensor(SQLModel, table=True):
     )
 
 class Reading(SQLModel, table=True):
-    __tablename__ = "readings"
+    __tablename__ = "reading"
     id: Optional[int] = Field(default=None, primary_key=True)
-    value_type_id : int
-    sensor_id : int
-    value : any
+    value_type_id : int | None = Field(default=None, foreign_key="value_type.id")
+    sensor_id : int | None = Field(default=None, foreign_key="sensor.id")
+    value : str
 
     created_at: Optional[datetime] = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
     updated_at: Optional[datetime] = Field(
@@ -97,7 +96,7 @@ class ValueType(SQLModel, table=True):
     __tablename__ = "value_type"
     id: Optional[int] = Field(default=None, primary_key=True)
     name : str
-    type : any
+    type : str
     
     created_at: Optional[datetime] = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
     updated_at: Optional[datetime] = Field(
@@ -116,10 +115,32 @@ class ValueType(SQLModel, table=True):
 # ----------------------------------------------------------------------- # Auth
 
 class Employe(SQLModel, table=True):
-    __tablename__ = "employees"
+    __tablename__ = "employe"
     id: Optional[int] = Field(default=None, primary_key=True)
     name : str
-    phone_number = int
+    phone_number : int
+    key_fob_id: int | None = Field(default=None, foreign_key="Key_fob.id")
+
+
+    created_at: Optional[datetime] = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
+    updated_at: Optional[datetime] = Field(
+        sa_column=Column(
+            DateTime(timezone=True), onupdate=func.now(), nullable=True
+        )
+    )
+    uid: Optional[UUID] = Field(
+        sa_column=Column(
+            UUIDSA(as_uuid=True),
+            server_default=text("gen_random_uuid()")
+        ), default=None
+    )
+
+class Guest(SQLModel, table=True):
+    __tablename__ = "guest"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name : str
+    key_fob_id: int | None = Field(default=None, foreign_key="Key_fob.id")
+
 
     created_at: Optional[datetime] = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
     updated_at: Optional[datetime] = Field(
@@ -135,12 +156,11 @@ class Employe(SQLModel, table=True):
     )
 
 class KeyFob(SQLModel, table=True):
-    __tablename__ = "Key_fobs"
+    __tablename__ = "Key_fob"
     id: Optional[int] = Field(default=None, primary_key=True)
-    employe_id : int | None = Field(default=None, foreign_key="employee.id")
     is_active : bool
     key : str
-    entryLog: list["EntryLog"] = Relationship()
+    valid_until : date
     created_at: Optional[datetime] = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
     updated_at: Optional[datetime] = Field(
         sa_column=Column(
@@ -158,9 +178,10 @@ class KeyFob(SQLModel, table=True):
 class EntryLog(SQLModel, table=True):
     __tablename__ = "entry_log"
     id: Optional[int] = Field(default=None, primary_key=True)
-    key_fob_id : int | None = Field(default=None, foreign_key="keyfob.id")    
     is_active : bool
-    key : str
+    sensor_id: int | None = Field(default=None, foreign_key="sensor.id")
+    key_fob_id: int | None = Field(default=None, foreign_key="Key_fob.id")
+    door_id : int | None = Field(default=None, foreign_key="door.id")
     created_at: Optional[datetime] = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
     updated_at: Optional[datetime] = Field(
         sa_column=Column(
@@ -174,6 +195,12 @@ class EntryLog(SQLModel, table=True):
         ), default=None
     )
 
+
+class Door(SQLModel, table=True):
+    __tablename__ = "door"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name : str
+    accses_code : str
 
 
 
