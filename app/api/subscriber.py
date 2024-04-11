@@ -1,14 +1,23 @@
+import asyncio
+import re
+from datetime import datetime, date
+from typing import List, Dict, Any
+from ipaddress import IPv4Address
+
+import logging
+
 from fastapi import FastAPI, Depends
 from fastapi_mqtt import FastMQTT, MQTTConfig
 from fastapi.responses import HTMLResponse
-import jsonpickle
-from ipaddress import IPv4Address
-from sqlmodel import Session,SQLModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.monitoring import Alarm,Device,Sensor,Employe,KeyFob,EntryLog,ValueType,Reading
+from sqlmodel import Session, SQLModel
+
+from models.monitoring import Alarm, Device, Sensor, Employe, KeyFob, EntryLog, ValueType, Reading, Door, Guest
 
 from database import engine
-import logging
+
 
 #Add the base logging config 
 logging.basicConfig(filename='/home/sysadmin/code/iot_case_h5/app/logs/application.log',  # log to a file named 'app.log'
@@ -21,29 +30,20 @@ logging.basicConfig(filename='/home/sysadmin/code/iot_case_h5/app/logs/applicati
 _logger = logging.getLogger(__name__)
 
 #Application 
-app = FastAPI(root_path="/api",docs_url="/docs", redoc_url="/redoc")
-
-#Database Orm create engine
-SQLModel.metadata.create_all(engine)
+app = FastAPI()
 
 
-def get_session():
-    with Session(engine) as session:
+@app.on_event("startup")
+async def startup_event():
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.drop_all)
+        await conn.run_sync(SQLModel.metadata.create_all)
+
+
+
+async def get_session():
+    async with AsyncSession(engine) as session:
         yield session
-
-
-class Nmap(SQLModel):
-    host: IPv4Address
-    portRange: str
-
-    class Config:
-        json_schema_extra = {
-            "example" : {
-                "host": "10.0.2.15",
-                 "portRange": "22-80",
-                 "description": "Scan the port from 22 to 80 of the ip address 10.0.2.15"
-            }
-        }
 
 
 # ------------------------------------------------------------ HTTP
@@ -89,15 +89,51 @@ mqtt = FastMQTT(config=mqtt_config)
 
 mqtt.init_app(app)
 
+root = "/mqtt/root" 
+temprature = f"{root}/room/+/+/temperature"
+doors_keycard = f"{root}/room/+/doors/keycard"
+doors_pin = f"{root}/room/+/doors/pin"
+
 @mqtt.on_connect()
 def connect(client, flags, rc, properties):
-    mqtt.client.subscribe("/mqtt") # subscribing mqtt topic wildcard- multi-level
+    mqtt.client.subscribe("/mqtt/#") # subscribing mqtt topic wildcard- multi-level
     print("connected: ", client, flags, rc, properties)
 
 @mqtt.on_message()
 async def message(client, topic, payload, qos, properties):
-    print("received message: ", topic, payload, qos, properties)
-    return 0 
+    parts = topic.split("/")
+
+    if parts[-1] == temprature.split("/")[-1]:
+        pattern = r"T: (\d+), H: (\d+)"
+        match = re.match(pattern, payload.decode())
+
+        if match:
+            # Extract the temperature and humidity values
+            temperature = int(match.group(1))
+            humidity = int(match.group(2))
+            device_id = parts[-3]
+            sensor_id = parts[-2]
+
+            # How do we know what value ID it is? 
+            temp_reading = Reading(value_type_id=1,sensor_id=int(sensor_id), value=str(humidity))
+            humid_reading = Reading(value_type_id=2,sensor_id=int(sensor_id), value=str(temperature))
+
+            async for session in get_session():
+                session.add(temp_reading)
+                session.add(humid_reading)
+                session.commit()
+                session.refresh(temp_reading)
+                session.refresh(humid_reading)
+                await session.commit()
+
+    if parts[-1] == doors_pin.split("/")[-1]:
+        return_address = re.findall(r'(?<=\+).+', payload.decode())
+        if return_address:
+            mqtt.client.publish(message_or_topic = return_address[0], payload = b'1', qos=0,properties=properties)
+    if parts[-1] == doors_keycard.split("/")[-1]:
+        return_address = re.findall(r'(?<=\+).+', payload.decode())
+        if return_address:
+            mqtt.client.publish(message_or_topic = return_address[0], payload = b'0', qos=0,properties=properties)
 
 
 @mqtt.on_disconnect()
@@ -113,9 +149,59 @@ async def func():
     mqtt.client.publish("/mqtt", "Hello from fastApi") 
     return {"result": True, "message": "Published"}
 
-@app.post("/scan/{host}")
-async def scan_host_port(nmap_details : Nmap):
-    results = {"got_val" : nmap_details}
-    print(type(nmap_details))
-    mqtt.client.publish("/mqtt/fromModel/nmap", jsonpickle.encode(nmap_details)) 
-    return results
+
+
+
+@app.post("/create_sample_data", response_model=Dict[str, List[Any]])
+async def create_sample_data():
+    async with AsyncSession(engine) as session:
+        # Create sample data for Alarm
+        alarm = Alarm(sensor_id=1, message="Sample message", severity="high", is_acknowledged=False, created_at=datetime.now())
+        session.add(alarm)
+
+        # Create sample data for Device
+        device = Device(name="Sample Device", created_at=datetime.now())
+        session.add(device)
+
+        # Create sample data for Sensor
+        sensor = Sensor(device_id=1, name="Sample Sensor", created_at=datetime.now())
+        session.add(sensor)
+
+        # Create sample data for Reading
+        reading = Reading(value_type_id=1, sensor_id=1, value="Sample Value", created_at=datetime.now())
+        session.add(reading)
+
+        # Create sample data for ValueType
+        value_type = ValueType(name="Sample Value Type", type="Sample Type", created_at=datetime.now())
+        session.add(value_type)
+
+        # Create sample data for Employe
+        employe = Employe(name="Sample Employe", phone_number=1234567890, created_at=datetime.now())
+        session.add(employe)
+
+        # Create sample data for Guest
+        guest = Guest(name="Sample Guest", created_at=datetime.now())
+        session.add(guest)
+
+        # Create sample data for KeyFob
+        key_fob = KeyFob(is_active=True, key="Sample Key", valid_until=date.today(), created_at=datetime.now())
+        session.add(key_fob)
+
+        # Create sample data for EntryLog
+        entry_log = EntryLog(is_active=True, sensor_id=1, key_fob_id=1, door_id=1, created_at=datetime.now())
+        session.add(entry_log)
+
+        # Create sample data for Door
+        door = Door(name="Sample Door", accses_code="Sample Code")
+        session.add(door)
+
+        await session.commit()
+
+        # Retrieve all sample data from the database
+        query_results = await session.execute(select(Alarm, Device, Sensor, Reading, ValueType,
+                                                     Employe, Guest, KeyFob, EntryLog, Door))
+        results = query_results.scalars().all()
+
+        return {
+            "sample_data": [result.dict() for result in results]
+        }

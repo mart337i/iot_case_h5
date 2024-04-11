@@ -1,10 +1,11 @@
-from sqlmodel import create_engine, SQLModel
+from sqlalchemy.ext.asyncio import create_async_engine
 
 # DATABASE_URL = os.environ.get("")
-DATABASE_URL = "postgresql://sysadmin:admin1234@localHost:5432/app"
-engine = create_engine(DATABASE_URL, echo=True)
+DATABASE_URL = "postgresql+asyncpg://sysadmin:admin1234@localHost:5432/app?prepared_statement_cache_size=0"
 
-
-def init_db():
-    SQLModel.metadata.create_all(engine)
+engine = create_async_engine(
+   DATABASE_URL,
+   echo=True,
+   future=True
+)
 

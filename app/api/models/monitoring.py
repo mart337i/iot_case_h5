@@ -1,11 +1,9 @@
 from datetime import datetime, date
 from typing import Optional
-from uuid import UUID
 
 from sqlmodel import Field, SQLModel, Column, DateTime, text, Relationship
 from sqlalchemy import func
 
-from sqlalchemy.dialects.postgresql import UUID as UUIDSA
 
 #-----------------Notes-----------------
 # Optional[int] on id fields indicate that it is done by the database.
@@ -28,12 +26,7 @@ class Alarm(SQLModel, table=True):
             DateTime(timezone=True), onupdate=func.now(), nullable=True
         )
     )
-    uid: Optional[UUID] = Field(
-        sa_column=Column(
-            UUIDSA(as_uuid=True),
-            server_default=text("gen_random_uuid()")
-        ), default=None
-    )
+
 
 class Device(SQLModel, table=True):
     __tablename__ = "device"
@@ -46,12 +39,7 @@ class Device(SQLModel, table=True):
             DateTime(timezone=True), onupdate=func.now(), nullable=True
         )
     )
-    uid: Optional[UUID] = Field(
-        sa_column=Column(
-            UUIDSA(as_uuid=True),
-            server_default=text("gen_random_uuid()")
-        ), default=None
-    )
+
 
 class Sensor(SQLModel, table=True):
     __tablename__ = "sensor"
@@ -65,12 +53,7 @@ class Sensor(SQLModel, table=True):
             DateTime(timezone=True), onupdate=func.now(), nullable=True
         )
     )
-    uid: Optional[UUID] = Field(
-        sa_column=Column(
-            UUIDSA(as_uuid=True),
-            server_default=text("gen_random_uuid()")
-        ), default=None
-    )
+
 
 class Reading(SQLModel, table=True):
     __tablename__ = "reading"
@@ -79,18 +62,13 @@ class Reading(SQLModel, table=True):
     sensor_id : int | None = Field(default=None, foreign_key="sensor.id")
     value : str
 
-    created_at: Optional[datetime] = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
+    created_at: Optional[datetime] = Field(sa_column=Column(DateTime(timezone=True), nullable=True))
     updated_at: Optional[datetime] = Field(
         sa_column=Column(
             DateTime(timezone=True), onupdate=func.now(), nullable=True
         )
     )
-    uid: Optional[UUID] = Field(
-        sa_column=Column(
-            UUIDSA(as_uuid=True),
-            server_default=text("gen_random_uuid()")
-        ), default=None
-    )
+
 
 class ValueType(SQLModel, table=True):
     __tablename__ = "value_type"
@@ -104,12 +82,7 @@ class ValueType(SQLModel, table=True):
             DateTime(timezone=True), server_onupdate=func.now(), nullable=True
         )
     )
-    uid: Optional[UUID] = Field(
-        sa_column=Column(
-            UUIDSA(as_uuid=True),
-            server_default=text("gen_random_uuid()")
-        ), default=None
-    )
+
 
 
 # ----------------------------------------------------------------------- # Auth
@@ -128,12 +101,7 @@ class Employe(SQLModel, table=True):
             DateTime(timezone=True), onupdate=func.now(), nullable=True
         )
     )
-    uid: Optional[UUID] = Field(
-        sa_column=Column(
-            UUIDSA(as_uuid=True),
-            server_default=text("gen_random_uuid()")
-        ), default=None
-    )
+
 
 class Guest(SQLModel, table=True):
     __tablename__ = "guest"
@@ -148,12 +116,7 @@ class Guest(SQLModel, table=True):
             DateTime(timezone=True), onupdate=func.now(), nullable=True
         )
     )
-    uid: Optional[UUID] = Field(
-        sa_column=Column(
-            UUIDSA(as_uuid=True),
-            server_default=text("gen_random_uuid()")
-        ), default=None
-    )
+
 
 class KeyFob(SQLModel, table=True):
     __tablename__ = "Key_fob"
@@ -167,12 +130,7 @@ class KeyFob(SQLModel, table=True):
             DateTime(timezone=True), onupdate=func.now(), nullable=True
         )
     )
-    uid: Optional[UUID] = Field(
-        sa_column=Column(
-            UUIDSA(as_uuid=True),
-            server_default=text("gen_random_uuid()")
-        ), default=None
-    )
+
 
 
 class EntryLog(SQLModel, table=True):
@@ -188,12 +146,7 @@ class EntryLog(SQLModel, table=True):
             DateTime(timezone=True), onupdate=func.now(), nullable=True
         )
     )
-    uid: Optional[UUID] = Field(
-        sa_column=Column(
-            UUIDSA(as_uuid=True),
-            server_default=text("gen_random_uuid()")
-        ), default=None
-    )
+
 
 
 class Door(SQLModel, table=True):
