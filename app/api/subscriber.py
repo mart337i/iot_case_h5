@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlmodel import Session, SQLModel
+from pydantic import BaseModel
 
 from models.monitoring import Alarm, Device, Sensor, Employe, KeyFob, EntryLog, ValueType, Reading, Door, Guest
 
@@ -150,24 +151,52 @@ async def func():
     return {"result": True, "message": "Published"}
 
 
-@app.post("/create_sample_data", response_model=Dict[str, List[Any]])
+@app.post("/get_all")
+async def get_all():
+    async with AsyncSession(engine, expire_on_commit=True) as session:
+        
+        reading = await session.execute(select(Reading))
+        alarm = await session.execute(select(Alarm))
+        device = await session.execute(select(Device))
+        sensor = await session.execute(select(Sensor))
+        employee = await session.execute(select(Employe))
+        entry_log = await session.execute(select(EntryLog))
+        valuetype = await session.execute(select(ValueType))
+        guest = await session.execute(select(Guest))
+
+        return {
+            "reading" : reading.scalars().all(),
+            "alarm" : alarm.scalars().all(),
+            "device" : device.scalars().all(),
+            "sensor" : sensor.scalars().all(),
+            "employee" : employee.scalars().all(),
+            "entry_log" : entry_log.scalars().all(),
+            "valuetype" : valuetype.scalars().all(),
+            "guest" : guest.scalars().all(),
+        }
+    
+@app.post("/create_sample_data", response_model=Dict[str, str])
 async def create_sample_data():
-    async with AsyncSession(engine) as session:
+    async with AsyncSession(engine,expire_on_commit=True) as session:
         # Create sample data for Alarm
         alarm = Alarm(sensor_id=1, message="Sample message", severity="high", is_acknowledged=False, created_at=datetime.now())
         session.add(alarm)
+        await session.commit()
         session.refresh(alarm)
+
 
 
         # Create sample data for Device
         device = Device(name="Sample Device", created_at=datetime.now())
         session.add(device)
+        await session.commit()
         session.refresh(device)
 
 
         # Create sample data for Sensor
         sensor = Sensor(device_id=device.id, name="Sample Sensor", created_at=datetime.now())
         session.add(sensor)
+        await session.commit()
         session.refresh(sensor)
 
                 
@@ -175,39 +204,48 @@ async def create_sample_data():
         # Create sample data for ValueType
         value_type = ValueType(name="Sample temp", type="temp", created_at=datetime.now())
         session.add(value_type)
+        await session.commit()
         session.refresh(value_type)
 
 
         # Create sample data for Reading
         reading = Reading(value_type_id=value_type.id, sensor_id=sensor.id, value="Sample Value", created_at=datetime.now())
         session.add(reading)
+        await session.commit()
         session.refresh(reading)
 
         # Create sample data for Employe
         employe = Employe(name="Sample Employe", phone_number=1234567890, created_at=datetime.now())
         session.add(employe)
+        await session.commit()
+        session.refresh(employe)
 
         # Create sample data for Guest
         guest = Guest(name="Sample Guest", created_at=datetime.now())
         session.add(guest)
+        await session.commit()
         session.refresh(guest)
 
 
         # Create sample data for KeyFob
         key_fob = KeyFob(is_active=True, key="Sample Key", valid_until=date.today(), created_at=datetime.now())
         session.add(key_fob)
+        await session.commit()
         session.refresh(key_fob)
 
 
         # Create sample data for Door
         door = Door(name="Sample Door", accses_code="Sample Code")
         session.add(door)
+        await session.commit()
         session.refresh(door)
         
+
 
         # Create sample data for EntryLog
         entry_log = EntryLog(is_active=True, sensor_id=sensor.id, key_fob_id=key_fob.id, door_id=door.id, created_at=datetime.now())
         session.add(entry_log)
+        await session.commit()
         session.refresh(entry_log)
 
 
@@ -215,11 +253,6 @@ async def create_sample_data():
 
         await session.commit()
 
-        # Retrieve all sample data from the database
-        query_results = await session.execute(select(Alarm, Device, Sensor, Reading, ValueType,
-                                                     Employe, Guest, KeyFob, EntryLog, Door))
-        results = query_results.scalars().all()
-
         return {
-            "sample_data": [result.dict() for result in results]
+            "sample_data": "Database contians data"
         }
