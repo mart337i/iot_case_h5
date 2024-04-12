@@ -150,30 +150,38 @@ async def func():
     return {"result": True, "message": "Published"}
 
 
-
-
 @app.post("/create_sample_data", response_model=Dict[str, List[Any]])
 async def create_sample_data():
     async with AsyncSession(engine) as session:
         # Create sample data for Alarm
         alarm = Alarm(sensor_id=1, message="Sample message", severity="high", is_acknowledged=False, created_at=datetime.now())
         session.add(alarm)
+        session.refresh(alarm)
+
 
         # Create sample data for Device
         device = Device(name="Sample Device", created_at=datetime.now())
         session.add(device)
+        session.refresh(device)
+
 
         # Create sample data for Sensor
-        sensor = Sensor(device_id=1, name="Sample Sensor", created_at=datetime.now())
+        sensor = Sensor(device_id=device.id, name="Sample Sensor", created_at=datetime.now())
         session.add(sensor)
+        session.refresh(sensor)
+
+                
+                
+        # Create sample data for ValueType
+        value_type = ValueType(name="Sample temp", type="temp", created_at=datetime.now())
+        session.add(value_type)
+        session.refresh(value_type)
+
 
         # Create sample data for Reading
-        reading = Reading(value_type_id=1, sensor_id=1, value="Sample Value", created_at=datetime.now())
+        reading = Reading(value_type_id=value_type.id, sensor_id=sensor.id, value="Sample Value", created_at=datetime.now())
         session.add(reading)
-
-        # Create sample data for ValueType
-        value_type = ValueType(name="Sample Value Type", type="Sample Type", created_at=datetime.now())
-        session.add(value_type)
+        session.refresh(reading)
 
         # Create sample data for Employe
         employe = Employe(name="Sample Employe", phone_number=1234567890, created_at=datetime.now())
@@ -182,18 +190,28 @@ async def create_sample_data():
         # Create sample data for Guest
         guest = Guest(name="Sample Guest", created_at=datetime.now())
         session.add(guest)
+        session.refresh(guest)
+
 
         # Create sample data for KeyFob
         key_fob = KeyFob(is_active=True, key="Sample Key", valid_until=date.today(), created_at=datetime.now())
         session.add(key_fob)
+        session.refresh(key_fob)
 
-        # Create sample data for EntryLog
-        entry_log = EntryLog(is_active=True, sensor_id=1, key_fob_id=1, door_id=1, created_at=datetime.now())
-        session.add(entry_log)
 
         # Create sample data for Door
         door = Door(name="Sample Door", accses_code="Sample Code")
         session.add(door)
+        session.refresh(door)
+        
+
+        # Create sample data for EntryLog
+        entry_log = EntryLog(is_active=True, sensor_id=sensor.id, key_fob_id=key_fob.id, door_id=door.id, created_at=datetime.now())
+        session.add(entry_log)
+        session.refresh(entry_log)
+
+
+
 
         await session.commit()
 
