@@ -97,6 +97,7 @@ class EntryLog(Base):
     sensor_id = Column(Integer, ForeignKey('sensors.id'))
     key_fob_id = Column(Integer, ForeignKey('key_fobs.id'))
     date = Column(DateTime)
+    approved = Column(Boolean)
 
     sensor = relationship("Sensor", back_populates="entry_logs")
     key_fob = relationship("KeyFob", back_populates="entry_logs")

@@ -6,18 +6,17 @@ from fastapi import FastAPI
 from fastapi_mqtt import FastMQTT, MQTTConfig
 from fastapi.responses import HTMLResponse
 
-from sqlalchemy.ext.asyncio import AsyncEngine
-from sqlmodel import SQLModel
-
 from models.monitoring import (Base,Device, Sensor, Door, Reading, ValueType,
     Alarm, Employee, Guest, KeyFob, EntryLog)
 
+from schema.monitoring_schema import DeviceCreate, DoorCreate, SensorCreate, ValueTypeCreate, EmployeeCreate, GuestCreate, KeyFobCreate, InitialDataCreate , DeviceWithDoorCreate
 from database import engine, async_session
 
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.orm import joinedload
 
 
 
@@ -50,53 +49,29 @@ async def get_session():
     async with async_session() as session:
         yield session
 
-# ------------------------------------------------------------ HTTP
-
-@app.get("/api",response_class=HTMLResponse)
-async def entry():
-    return """
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Greenhouse API</title>
-                <!-- Include Bootstrap CSS from CDN -->
-                <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
-            </head>
-            <body class="bg-light">
-                <div class="container py-5">
-                    <h1 class="display-4 text-center mb-3">Welcome to the Greenhouse Temperature and Humidity API</h1>
-                    <p class="lead text-center mb-5">Use the links below to navigate to the API documentation:</p>
-                    <div class="row">
-                        <div class="col-md-6 text-center mb-3">
-                            <a href="/api/docs" class="btn btn-primary btn-lg">Swagger UI Documentation</a>
-                        </div>
-                        <div class="col-md-6 text-center mb-3">
-                            <a href="/api/redoc" class="btn btn-secondary btn-lg">ReDoc Documentation</a>
-                        </div>
-                    </div>
-                </div>
-                <!-- jQuery first, then Popper.js, then Bootstrap JS -->
-                <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
-                <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.9.2/dist/umd/popper.min.js"></script>
-                <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
-            </body>
-            </html>
-
-    """
-
 
 # ------------------------------------------------------------ MQTT
 
-mqtt_config = MQTTConfig()
+mqtt_config = MQTTConfig(
+    host="localhost",  # e.g., "localhost" or "broker.hivemq.com"
+    port=1883,  # Common ports are 1883 for non-TLS or 8883 for TLS
+    username="",  # If required by your broker
+    password="",  # If required by your broker
+    keepalive=60,  # Keep alive interval in seconds
+    clean_session=True,  # Set False if you want the broker to remember your client state
+    will_message="Disconnected",  # The last will message to be sent
+    reconnect_delay=10,  # Delay in seconds between reconnections
+    reconnect_delay_max=120,  # Maximum delay in seconds between reconnections
+)
 
 mqtt = FastMQTT(config=mqtt_config)
 
 mqtt.init_app(app)
 
-root = "/mqtt/root" 
-temprature = f"{root}/room/+/+/temperature"
-doors_keycard = f"{root}/room/+/doors/keycard"
-doors_pin = f"{root}/room/+/doors/pin"
+# root = "/mqtt/root" 
+# temprature = f"{root}/room/+/+/temperature"
+# doors_keycard = f"{root}/room/+/doors/keycard"
+# doors_pin = f"{root}/room/+/doors/pin"
 
 @mqtt.on_connect()
 def connect(client, flags, rc, properties):
@@ -105,52 +80,138 @@ def connect(client, flags, rc, properties):
 
 @mqtt.on_message()
 async def message(client, topic, payload, qos, properties):
-    parts = topic.split("/")
-
-    if parts[-1] == temprature.split("/")[-1]:
+    async def extract_temp_humidity(payload):
         pattern = r"T: (\d+), H: (\d+)"
-        match = re.match(pattern, payload.decode())
+        match = re.match(pattern, payload)
+        if not match:
+            raise ValueError("Invalid temperature/humidity format")
+        temperature = int(match.group(1))
+        humidity = int(match.group(2))
+        return temperature, humidity
 
+    async def store_readings(temperature, humidity, device_id, sensor_id):
+        temp_reading = Reading(value_type_id=1, sensor_id=int(sensor_id), value=str(temperature))
+        humid_reading = Reading(value_type_id=2, sensor_id=int(sensor_id), value=str(humidity))
+        async with async_session() as session:
+            session.add_all([temp_reading, humid_reading])
+            await session.commit()
+
+    async def parse_payload_keycard(payload):
+        match = re.match(r"!doorkey\?(\d+)\+(.+)", payload)
         if match:
-            # Extract the temperature and humidity values
-            temperature = int(match.group(1))
-            humidity = int(match.group(2))
-            device_id = parts[-3]
-            sensor_id = parts[-2]
+            keyfob_id = int(match.group(1))
+            return_address = match.group(2)
+            return keyfob_id, return_address
+        return None, None
+    
+    async def verify_keyfob_access(keyfob_id, sensor_id):
+        """
+        Verifies that the keyfob exists and matches the door's access code.
+        """
+        async with async_session() as session:
+            # Assuming each sensor is associated with one door
+            stmt = select(Sensor).where(Sensor.id == sensor_id).options(joinedload(Sensor.door))
+            result = await session.execute(stmt)
+            sensor = result.scalar_one_or_none()
 
-            # How do we know what value ID it is? 
-            temp_reading = Reading(value_type_id=1,sensor_id=int(sensor_id), value=str(humidity))
-            humid_reading = Reading(value_type_id=2,sensor_id=int(sensor_id), value=str(temperature))
+            if sensor and sensor.door:
+                stmt = select(KeyFob).where(KeyFob.id == keyfob_id, KeyFob.valid_until >= datetime.utcnow())
+                result = await session.execute(stmt)
+                keyfob = result.scalar_one_or_none()
 
-            async for session in get_session():
-                session.add(temp_reading)
-                session.add(humid_reading)
-                session.commit()
-                session.refresh(temp_reading)
-                session.refresh(humid_reading)
-                await session.commit()
+                if keyfob and keyfob.key == sensor.door.access_code:
+                    return True  # Access granted
 
-    if parts[-1] == doors_pin.split("/")[-1]:
-        return_address = re.findall(r'(?<=\+).+', payload.decode())
-        if return_address:
-            mqtt.client.publish(message_or_topic = return_address[0], payload = b'1', qos=0,properties=properties)
-    if parts[-1] == doors_keycard.split("/")[-1]:
-        return_address = re.findall(r'(?<=\+).+', payload.decode())
-        if return_address:
-            mqtt.client.publish(message_or_topic = return_address[0], payload = b'0', qos=0,properties=properties)
+            return False  # Access denied
+        
+    async def handle_keycard(payload, sensor_id):
+        """
+        Handles the keycard payload.
+        """
+        keyfob_id, return_address = await parse_payload_keycard(payload)
+        if keyfob_id is not None and return_address is not None:
+            access_granted = await verify_keyfob_access(keyfob_id, sensor_id)
+            response_payload = b'1' if access_granted else b'0'
+            mqtt.client.publish(return_address, payload=response_payload, qos=0)
+
+            if access_granted:
+                # Create entry log only if access is granted
+                await create_entry_log(sensor_id)
+
+    async def create_entry_log(sensor_id, key_fob_id, approved):
+        """
+        Creates an entry log with the given sensor ID and access method (keycard or pin).
+        """
+        async with async_session() as session:
+            entry_log = EntryLog(
+                sensor_id=sensor_id, 
+                key_fob_id=key_fob_id, 
+                date=datetime.utcnow(), 
+                approved=approved
+            )
+            session.add(entry_log)
+            await session.commit()
+
+    parts = topic.split("/")
+    payload_decoded = payload.decode()
+
+    # Temperature and Humidity Example
+    if parts[-1] == "temperature":
+        try:
+            temperature, humidity = extract_temp_humidity(payload_decoded)
+            await store_readings(temperature, humidity, parts[-3], parts[-2])
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    # Doors Keycard Example
+    elif parts[-1] == "keycard":
+        await handle_keycard(payload_decoded, parts[-2])
+
+    # Doors Pin Example
+    elif parts[-1] == "pin":
+        await pin(payload_decoded, parts[-2])
 
 
 @mqtt.on_subscribe()
 def subscribe(client, mid, qos, properties):
     print("subscribed", client, mid, qos, properties)
 
-@app.get("/")
-async def func():
+
+# ------------------------------------------------------------ HTTP
+@app.get("/", response_class=HTMLResponse)
+async def root():
     mqtt.client.publish("/mqtt", "Hello from fastApi") 
-    return {"result": True, "message": "You have connected to Fastapi mqtt"}
+    return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>MQTT Sub api</title>
+            <!-- Include Bootstrap CSS from CDN -->
+            <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+        </head>
+        <body class="bg-light">
+            <div class="container py-5">
+                <h1 class="display-4 text-center mb-3">MQTT Sub api</h1>
+                <p class="lead text-center mb-5">Use the links below to navigate to the API documentation:</p>
+                <div class="row">
+                    <div class="col-md-6 text-center mb-3">
+                        <a href="/docs" class="btn btn-primary btn-lg">Swagger UI Documentation</a>
+                    </div>
+                    <div class="col-md-6 text-center mb-3">
+                        <a href="/redoc" class="btn btn-secondary btn-lg">ReDoc Documentation</a>
+                    </div>
+                </div>
+            </div>
+            <!-- jQuery first, then Popper.js, then Bootstrap JS -->
+            <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.9.2/dist/umd/popper.min.js"></script>
+            <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+        </body>
+        </html>
+    """
 
 
-@app.post("/create-sample-data", status_code=status.HTTP_201_CREATED)
+@app.post("/create-sample-data", status_code=status.HTTP_200_OK)
 async def create_sample_data(session: AsyncSession = Depends(get_session)):
     try:
         # Create sample value types
@@ -196,28 +257,52 @@ async def create_sample_data(session: AsyncSession = Depends(get_session)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/get-sample-data")
-async def get_sample_data(session: AsyncSession = Depends(get_session)):
-    try:
-        reading = await session.execute(select(Reading))
-        alarm = await session.execute(select(Alarm))
-        device = await session.execute(select(Device))
-        sensor = await session.execute(select(Sensor))
-        employee = await session.execute(select(Employee))
-        entry_log = await session.execute(select(EntryLog))
-        valuetype = await session.execute(select(ValueType))
-        guest = await session.execute(select(Guest))
+@app.get("/get_all")
+async def get_all(session: AsyncSession = Depends(get_session)):
 
-        return {
-            "reading" : reading.scalars().all(),
-            "alarm" : alarm.scalars().all(),
-            "device" : device.scalars().all(),
-            "sensor" : sensor.scalars().all(),
-            "employee" : employee.scalars().all(),
-            "entry_log" : entry_log.scalars().all(),
-            "valuetype" : valuetype.scalars().all(),
-            "guest" : guest.scalars().all(),
-        }
+    reading = await session.execute(select(Reading))
+    alarm = await session.execute(select(Alarm))
+    device = await session.execute(select(Device))
+    sensor = await session.execute(select(Sensor))
+    employee = await session.execute(select(Employee))
+    entry_log = await session.execute(select(EntryLog))
+    valuetype = await session.execute(select(ValueType))
+    guest = await session.execute(select(Guest))
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "reading" : reading.scalars().all(),
+        "alarm" : alarm.scalars().all(),
+        "device" : device.scalars().all(),
+        "sensor" : sensor.scalars().all(),
+        "employee" : employee.scalars().all(),
+        "entry_log" : entry_log.scalars().all(),
+        "valuetype" : valuetype.scalars().all(),
+        "guest" : guest.scalars().all(),
+    }
+
+    
+
+@app.post("/create-device", status_code=status.HTTP_200_OK)
+async def create_device(device_data: DeviceCreate, session: AsyncSession = Depends(get_session)):
+    device = Device(name=device_data.name)
+    sensor = Sensor(name=device_data.sensor.name, device=device)
+    session.add(device)
+    session.add(sensor)
+    await session.commit()
+    return {"message": "Device with sensor created successfully", "device_id": device.id, "sensor_id": sensor.id}
+
+@app.post("/create-device-with-door", status_code=status.HTTP_200_OK)
+async def create_device_with_door(device_data: DeviceWithDoorCreate, session: AsyncSession = Depends(get_session)):
+    device = Device(name=device_data.name)
+    door = Door(name=device_data.door.name, access_code=device_data.door.access_code)
+    sensor = Sensor(name=device_data.sensor.name, device=device, door=door)
+    session.add(device)
+    session.add(door)
+    session.add(sensor)
+    await session.commit()
+    return {
+        "message": "Device with sensor and door created successfully",
+        "device_id": device.id,
+        "sensor_id": sensor.id,
+        "door_id": door.id
+    }
