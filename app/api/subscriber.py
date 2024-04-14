@@ -1,23 +1,24 @@
-import asyncio
 import re
-from datetime import datetime, date
-from typing import List, Dict, Any
-from ipaddress import IPv4Address
 
 import logging
 
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI
 from fastapi_mqtt import FastMQTT, MQTTConfig
 from fastapi.responses import HTMLResponse
-from sqlalchemy import select
+
+from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlmodel import SQLModel
+
+from models.monitoring import (Base,Device, Sensor, Door, Reading, ValueType,
+    Alarm, Employee, Guest, KeyFob, EntryLog)
+
+from database import engine, async_session
+
+from datetime import datetime, timedelta
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
-from sqlmodel import Session, SQLModel
-from pydantic import BaseModel
-
-from models.monitoring import Alarm, Device, Sensor, Employe, KeyFob, EntryLog, ValueType, Reading, Door, Guest
-
-from database import engine
 
 
 #Add the base logging config 
@@ -37,15 +38,17 @@ app = FastAPI()
 @app.on_event("startup")
 async def startup_event():
     async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.drop_all)
-        await conn.run_sync(SQLModel.metadata.create_all)
+        # Drop all tables (make sure this is what you want!)
+        await conn.run_sync(Base.metadata.drop_all)
+        # Create all tables
+        await conn.run_sync(Base.metadata.create_all)
+        
 
 
-
+# Dependency to get the async session
 async def get_session():
-    async with AsyncSession(engine) as session:
+    async with async_session() as session:
         yield session
-
 
 # ------------------------------------------------------------ HTTP
 
@@ -137,10 +140,6 @@ async def message(client, topic, payload, qos, properties):
             mqtt.client.publish(message_or_topic = return_address[0], payload = b'0', qos=0,properties=properties)
 
 
-@mqtt.on_disconnect()
-def disconnect(client, packet, exc=None):
-    print("Disconnected")
-
 @mqtt.on_subscribe()
 def subscribe(client, mid, qos, properties):
     print("subscribed", client, mid, qos, properties)
@@ -148,18 +147,63 @@ def subscribe(client, mid, qos, properties):
 @app.get("/")
 async def func():
     mqtt.client.publish("/mqtt", "Hello from fastApi") 
-    return {"result": True, "message": "Published"}
+    return {"result": True, "message": "You have connected to Fastapi mqtt"}
 
 
-@app.post("/get_all")
-async def get_all():
-    async with AsyncSession(engine, expire_on_commit=True) as session:
+@app.post("/create-sample-data", status_code=status.HTTP_201_CREATED)
+async def create_sample_data(session: AsyncSession = Depends(get_session)):
+    try:
+        # Create sample value types
+        temp_value_type = ValueType(name="Temperature", type="Celsius")
+        humidity_value_type = ValueType(name="Humidity", type="Percentage")
         
+        # Create sample devices, sensors, and doors
+        sample_device = Device(name="Thermostat")
+        sample_door = Door(name="Front Door", access_code="12345")
+        sample_sensor = Sensor(name="Temperature Sensor", device=sample_device, door=sample_door)
+
+        # Create sample readings
+        temp_reading = Reading(value_type=temp_value_type, sensor=sample_sensor, value="22")
+        humidity_reading = Reading(value_type=humidity_value_type, sensor=sample_sensor, value="45")
+
+        # Create sample alarm
+        sample_alarm = Alarm(sensor=sample_sensor, message="High temperature!", severity="High", is_acknowledged=False)
+
+        # Create sample employees, guests, and key fobs
+        sample_employee = Employee(name="Alice", phonenumber="1234567890")
+        sample_guest = Guest(name="Bob")
+        sample_key_fob = KeyFob(is_active=True, key="ABC123", valid_until=datetime.utcnow() + timedelta(days=1))
+
+        # Link employee and guest to key fob
+        sample_employee.key_fob = sample_key_fob
+        sample_guest.key_fob = sample_key_fob
+
+        # Create sample entry log
+        sample_entry_log = EntryLog(sensor=sample_sensor, key_fob=sample_key_fob, date=datetime.utcnow())
+
+        # Add all to session and commit
+        session.add_all([
+            temp_value_type, humidity_value_type, sample_device, sample_door, sample_sensor,
+            temp_reading, humidity_reading, sample_alarm, sample_employee, sample_guest,
+            sample_key_fob, sample_entry_log
+        ])
+        await session.commit()
+
+        return {"message": "Sample data created successfully"}
+
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/get-sample-data")
+async def get_sample_data(session: AsyncSession = Depends(get_session)):
+    try:
         reading = await session.execute(select(Reading))
         alarm = await session.execute(select(Alarm))
         device = await session.execute(select(Device))
         sensor = await session.execute(select(Sensor))
-        employee = await session.execute(select(Employe))
+        employee = await session.execute(select(Employee))
         entry_log = await session.execute(select(EntryLog))
         valuetype = await session.execute(select(ValueType))
         guest = await session.execute(select(Guest))
@@ -174,85 +218,6 @@ async def get_all():
             "valuetype" : valuetype.scalars().all(),
             "guest" : guest.scalars().all(),
         }
-    
-@app.post("/create_sample_data", response_model=Dict[str, str])
-async def create_sample_data():
-    async with AsyncSession(engine,expire_on_commit=True) as session:
-        # Create sample data for Alarm
-        alarm = Alarm(sensor_id=1, message="Sample message", severity="high", is_acknowledged=False, created_at=datetime.now())
-        session.add(alarm)
-        await session.commit()
-        session.refresh(alarm)
 
-
-
-        # Create sample data for Device
-        device = Device(name="Sample Device", created_at=datetime.now())
-        session.add(device)
-        await session.commit()
-        session.refresh(device)
-
-
-        # Create sample data for Sensor
-        sensor = Sensor(device_id=device.id, name="Sample Sensor", created_at=datetime.now())
-        session.add(sensor)
-        await session.commit()
-        session.refresh(sensor)
-
-                
-                
-        # Create sample data for ValueType
-        value_type = ValueType(name="Sample temp", type="temp", created_at=datetime.now())
-        session.add(value_type)
-        await session.commit()
-        session.refresh(value_type)
-
-
-        # Create sample data for Reading
-        reading = Reading(value_type_id=value_type.id, sensor_id=sensor.id, value="Sample Value", created_at=datetime.now())
-        session.add(reading)
-        await session.commit()
-        session.refresh(reading)
-
-        # Create sample data for Employe
-        employe = Employe(name="Sample Employe", phone_number=1234567890, created_at=datetime.now())
-        session.add(employe)
-        await session.commit()
-        session.refresh(employe)
-
-        # Create sample data for Guest
-        guest = Guest(name="Sample Guest", created_at=datetime.now())
-        session.add(guest)
-        await session.commit()
-        session.refresh(guest)
-
-
-        # Create sample data for KeyFob
-        key_fob = KeyFob(is_active=True, key="Sample Key", valid_until=date.today(), created_at=datetime.now())
-        session.add(key_fob)
-        await session.commit()
-        session.refresh(key_fob)
-
-
-        # Create sample data for Door
-        door = Door(name="Sample Door", accses_code="Sample Code")
-        session.add(door)
-        await session.commit()
-        session.refresh(door)
-        
-
-
-        # Create sample data for EntryLog
-        entry_log = EntryLog(is_active=True, sensor_id=sensor.id, key_fob_id=key_fob.id, door_id=door.id, created_at=datetime.now())
-        session.add(entry_log)
-        await session.commit()
-        session.refresh(entry_log)
-
-
-
-
-        await session.commit()
-
-        return {
-            "sample_data": "Database contians data"
-        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
