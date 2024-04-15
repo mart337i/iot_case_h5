@@ -9,6 +9,8 @@ from fastapi.responses import HTMLResponse
 from models.monitoring import (Base,Device, Sensor, Door, Reading, ValueType,
     Alarm, Employee, Guest, KeyFob, EntryLog)
 
+from schema.monitoring_schema import DeviceSchema, SensorSchema,SensorSchemaWithoutDoor ,DoorSchema
+
 from database import engine, async_session
 
 from datetime import datetime, timedelta
@@ -17,20 +19,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
-from schema.utils_schema import AmountToQuery
-
 import os
 from dotenv import load_dotenv
 
 # Load environment variables from the .env file
-dotenv_path = os.path.join(os.path.dirname(__file__), '..', 'configFiles', '.env')
-load_dotenv(dotenv_path)
+def load_env_file(file_path: str):
+    dotenv_path = os.path.join(os.path.dirname(__file__), '..', 'configFiles', file_path)
+    load_dotenv(dotenv_path)
+
+# Load environment variables from the .control.env file
+load_env_file('.control.env')
 
 # Define your variables with default values
 Max_temp = int(os.getenv("Max_temp", 0))
 Min_temp = int(os.getenv("Min_temp", 0))
 Max_humid = int(os.getenv("Max_humid", 0))
 Min_humid = int(os.getenv("Min_humid", 0))
+
+# Load environment variables from the .env file
+load_env_file('.env')
+
+DEBUG = os.getenv("Debug_mode", False)
+
+# Load environment variables from the mqtt.env file
+load_env_file('mqtt.env')
 
 
 #Add the base logging config 
@@ -49,10 +61,11 @@ app = FastAPI()
 @app.on_event("startup")
 async def startup_event():
     async with engine.begin() as conn:
-        # Drop all tables (make sure this is what you want!)
-        await conn.run_sync(Base.metadata.drop_all)
-        # Create all tables
-        await conn.run_sync(Base.metadata.create_all)
+        if DEBUG is True:
+            # Drop all tables (make sure this is what you want!)
+            await conn.run_sync(Base.metadata.drop_all)
+            # Create all tables
+            await conn.run_sync(Base.metadata.create_all)
         return
 
 
@@ -65,15 +78,15 @@ async def get_session():
 # ------------------------------------------------------------ MQTT
 
 mqtt_config = MQTTConfig(
-    host="localhost",  # e.g., "localhost" or "broker.hivemq.com"
-    port=1883,  # Common ports are 1883 for non-TLS or 8883 for TLS
-    username="",  # If required by your broker
-    password="",  # If required by your broker
-    keepalive=60,  # Keep alive interval in seconds
-    clean_session=True,  # Set False if you want the broker to remember your client state
-    will_message="Disconnected",  # The last will message to be sent
-    reconnect_delay=10,  # Delay in seconds between reconnections
-    reconnect_delay_max=120,  # Maximum delay in seconds between reconnections
+    host=os.getenv("HOST", "localhost"),
+    port=int(os.getenv("PORT", 1883)),
+    username=os.getenv("USERNAME", ""),
+    password=os.getenv("PASSWORD", ""),
+    keepalive=int(os.getenv("KEEPALIVE", 60)),
+    clean_session=bool(os.getenv("CLEAN_SESSION", True)),
+    will_message=os.getenv("WILL_MESSAGE", "Disconnected"),
+    reconnect_delay=int(os.getenv("RECONNECT_DELAY", 10)),
+    reconnect_delay_max=int(os.getenv("RECONNECT_DELAY_MAX", 120))
 )
 
 mqtt = FastMQTT(config=mqtt_config)
@@ -144,9 +157,9 @@ async def message(client, topic, payload, qos, properties):
             if keyfob and keyfob.key == keycard_code and keyfob.is_active: 
                 return keyfob.id, True # Access granted
             elif keyfob:
-                return keyfob.id, False # Access granted
+                return keyfob.id, False # Access Denied
 
-        return None , False  # Access denied
+        return None , False  # Error
         
     async def handle_keycard(payload, sensor_id):
         """
@@ -424,3 +437,43 @@ async def get_alarm(amount : int,  is_acknowledged:bool,session: AsyncSession = 
     return {
         "logs" : alarm.scalars().all(),
     }
+
+# Define endpoint to create a device
+@app.post("/devices/")
+async def create_device(device_data: DeviceSchema, session: AsyncSession = Depends(get_session)):
+    device_name = device_data.name
+    device = Device(name=device_name)
+    session.add(device)
+    await session.commit()
+    return device
+
+@app.post("/sensors/")
+async def create_sensor(sensor: SensorSchema, session: AsyncSession = Depends(get_session)):
+    sensor_data = sensor.dict()
+    sensor_name = sensor_data.get("name")
+    device_id = sensor_data.get("device_id")
+    door_id = sensor_data.get("door_id")
+    new_sensor = Sensor(name=sensor_name, device_id=device_id, door_id=door_id)
+    session.add(new_sensor)
+    await session.commit()
+    return new_sensor
+
+@app.post("/doors/")
+async def create_door(door: DoorSchema, session: AsyncSession = Depends(get_session)):
+    door_data = door.dict()
+    door_name = door_data.get("name")
+    access_code = door_data.get("access_code")
+    new_door = Door(name=door_name, access_code=access_code)
+    session.add(new_door)
+    await session.commit()
+    return new_door
+
+@app.post("/sensors-without-door/")
+async def create_sensor_without_door(sensor: SensorSchemaWithoutDoor, session: AsyncSession = Depends(get_session)):
+    sensor_data = sensor.dict()
+    sensor_name = sensor_data.get("name")
+    device_id = sensor_data.get("device_id")
+    new_sensor = Sensor(name=sensor_name, device_id=device_id)
+    session.add(new_sensor)
+    await session.commit()
+    return new_sensor
