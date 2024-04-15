@@ -21,6 +21,10 @@ class SensorCreate(BaseModel):
     readings: List[ReadingCreate]
     alarms: List[AlarmCreate]
 
+class DoorSensorCreate(BaseModel):
+    name: str
+    door: Optional[DoorCreate] = None
+
 class DeviceCreate(BaseModel):
     name: str
     sensors: List[SensorCreate]
@@ -48,6 +52,13 @@ class DeviceWithDoorCreate(BaseModel):
     name: str
     sensor: SensorCreate
     door: DoorCreate
+
+class SensorWithDoorCreate(BaseModel):
+    device_id : int
+    sensor: DoorSensorCreate
+
+class BaseDeviceCreate(BaseModel):
+    name : int
 
 class InitialDataCreate(BaseModel):
     devices: List[DeviceCreate]
