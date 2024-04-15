@@ -9,15 +9,28 @@ from fastapi.responses import HTMLResponse
 from models.monitoring import (Base,Device, Sensor, Door, Reading, ValueType,
     Alarm, Employee, Guest, KeyFob, EntryLog)
 
-from schema.monitoring_schema import DeviceCreate, DoorCreate, SensorCreate, ValueTypeCreate, EmployeeCreate, SensorCreate, SensorWithDoorCreate, BaseDeviceCreate , DeviceWithDoorCreate
 from database import engine, async_session
 
 from datetime import datetime, timedelta
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy.orm import joinedload , selectinload
+from sqlalchemy.orm import selectinload
 
+from schema.utils_schema import AmountToQuery
+
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from the .env file
+dotenv_path = os.path.join(os.path.dirname(__file__), '..', 'configFiles', '.env')
+load_dotenv(dotenv_path)
+
+# Define your variables with default values
+Max_temp = int(os.getenv("Max_temp", 0))
+Min_temp = int(os.getenv("Min_temp", 0))
+Max_humid = int(os.getenv("Max_humid", 0))
+Min_humid = int(os.getenv("Min_humid", 0))
 
 
 #Add the base logging config 
@@ -33,14 +46,13 @@ _logger = logging.getLogger(__name__)
 #Application 
 app = FastAPI()
 
-
 @app.on_event("startup")
 async def startup_event():
     async with engine.begin() as conn:
         # Drop all tables (make sure this is what you want!)
-        # await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.drop_all)
         # Create all tables
-        # await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(Base.metadata.create_all)
         return
 
 
@@ -68,10 +80,10 @@ mqtt = FastMQTT(config=mqtt_config)
 
 mqtt.init_app(app)
 
-# root = "/mqtt/root" 
-# temprature = f"{root}/room/+/+/temperature"
-# doors_keycard = f"{root}/room/+/doors/keycard"
-# doors_pin = f"{root}/room/+/doors/pin"
+root = "/mqtt/root" 
+temprature = f"{root}/room/+/+/temperature"
+doors_keycard = f"{root}/room/+/doors/keycard"
+doors_pin = f"{root}/room/+/doors/pin"
 
 @mqtt.on_connect()
 def connect(client, flags, rc, properties):
@@ -88,10 +100,23 @@ async def message(client, topic, payload, qos, properties):
         temperature = int(match.group(1))
         humidity = int(match.group(2))
         return temperature, humidity
+    
+    async def create_alarm(sensor_id, message, severity,is_acknowledged=False):
+        async with async_session() as session:
+            alarm = Alarm(sensor_id = sensor_id, message=message,severity=severity, is_acknowledged=is_acknowledged)
+            session.add(alarm)
+            await session.commit()
+
 
     async def store_readings(temperature, humidity, device_id, sensor_id):
         temp_reading = Reading(value_type_id=1, sensor_id=int(sensor_id), value=str(temperature))
         humid_reading = Reading(value_type_id=2, sensor_id=int(sensor_id), value=str(humidity))
+
+        if int(temp_reading.value) > Max_temp or int(temp_reading.value) < Min_temp:
+            await create_alarm(sensor_id = int(sensor_id), message="Temp outside normal fuction",severity="warning", is_acknowledged=False )
+        if int(humid_reading.value) > Max_humid or int(humid_reading.value) < Min_humid:
+            await create_alarm(sensor_id = int(sensor_id), message="humid outside normal fuction",severity="warning", is_acknowledged=False )
+
         async with async_session() as session:
             session.add_all([temp_reading, humid_reading])
             await session.commit()
@@ -109,14 +134,6 @@ async def message(client, topic, payload, qos, properties):
         Verifies that the keyfob exists and matches the door's access code.
         """
         async with async_session() as session:
-            # Assuming each sensor is associated with one door
-            _logger.warning(f"sensor_id to qury : {sensor_id}")
-            stmt = select(Sensor).where(Sensor.id == int(sensor_id)).options(selectinload(Sensor.door))
-            result = await session.execute(stmt)
-            sensor = result.scalars().all()
-            sensor : Sensor = sensor[0]
-
-
             stmt = select(KeyFob).where(KeyFob.key == keycard_code, KeyFob.valid_until >= datetime.utcnow())
             result = await session.execute(stmt)
             keyfob = result.scalars().all()
@@ -125,8 +142,9 @@ async def message(client, topic, payload, qos, properties):
 
 
             if keyfob and keyfob.key == keycard_code and keyfob.is_active: 
-                _logger.warning(f"{keyfob.id} {sensor.door.access_code}")
                 return keyfob.id, True # Access granted
+            elif keyfob:
+                return keyfob.id, False # Access granted
 
         return None , False  # Access denied
         
@@ -138,18 +156,21 @@ async def message(client, topic, payload, qos, properties):
         _logger.warning(f"return_address :: {return_address}")
 
         if return_address is not None and keycard_code is not None:
-            try:
-                keyfob_id,access_granted = await verify_keyfob_access(sensor_id,keycard_code)
-                if access_granted:
-                    # Create entry log only if access is granted
-                    await create_entry_log_keyfob(sensor_id,keyfob_id,access_granted)
-                    
-                response_payload = b'1' if access_granted else b'0'
-                mqtt.client.publish(message_or_topic = return_address[0], payload = response_payload, qos=0,properties=properties)
-            except Exception as e:
+
+            keyfob_id,access_granted = await verify_keyfob_access(sensor_id,keycard_code)
+            if not keyfob_id and not access_granted: 
                 response_payload = b'0'
                 mqtt.client.publish(message_or_topic = return_address[0], payload = response_payload, qos=0,properties=properties)
-                _logger.error(f"{e}")
+                _logger.error("keyfob_id not found")
+                return
+
+            # Create entry log only if access is granted
+            await create_entry_log_keyfob(sensor_id,keyfob_id,access_granted)
+
+                
+            response_payload = b'1' if access_granted else b'0'
+            mqtt.client.publish(message_or_topic = return_address[0], payload = response_payload, qos=0,properties=properties)
+
 
 
 
@@ -166,19 +187,65 @@ async def message(client, topic, payload, qos, properties):
             )
             session.add(entry_log)
             await session.commit()
-    async def create_entry_log_pin(sensor_id, key_fob_id, approved):
+
+    async def create_entry_log_pin(sensor_id, approved):
         """
         Creates an entry log with the given sensor ID and access method (keycard or pin).
         """
         async with async_session() as session:
             entry_log = EntryLog(
-                sensor_id=sensor_id, 
-                key_fob_id=key_fob_id, 
+                sensor_id=int(sensor_id), 
                 date=datetime.utcnow(), 
-                approved=approved
+                approved=bool(approved)
             )
             session.add(entry_log)
             await session.commit()
+
+
+    async def parse_payload_pin(payload):
+        
+        return_address = re.findall(r'(?<=\+).+', payload)
+        keycard_code = re.findall(r'!(.*?)\+', payload)
+        if return_address:
+            return return_address,keycard_code[0]
+        return None,None
+    
+    async def verify_pin(sensor_id,pincode):
+        """
+        Verifies that the keyfob exists and matches the door's access code.
+        """
+        async with async_session() as session:
+            # Assuming each sensor is associated with one door
+            _logger.warning(f"sensor_id to qury : {sensor_id}")
+            stmt = select(Sensor).where(Sensor.id == int(sensor_id)).options(selectinload(Sensor.door))
+            result = await session.execute(stmt)
+            sensor = result.scalars().all()
+            sensor : Sensor = sensor[0]
+
+            if sensor and sensor.door.access_code == pincode:
+                return True
+
+        return False  # Access denied
+    
+    async def handle_pin(payload, sensor_id):
+        """
+        Handles the keycard payload.
+        """
+        return_address,pin_code = await parse_payload_pin(payload)
+        _logger.warning(f"return_address :: {return_address}, pin_code {pin_code}")
+
+        if return_address is not None and pin_code is not None:
+            try:
+                access_granted = await verify_pin(sensor_id,pin_code)
+                await create_entry_log_pin(sensor_id,access_granted)
+                    
+                response_payload = b'1' if access_granted else b'0'
+                mqtt.client.publish(message_or_topic = return_address[0], payload = response_payload, qos=0,properties=properties)
+            except Exception as e:
+                response_payload = b'0'
+                mqtt.client.publish(message_or_topic = return_address[0], payload = response_payload, qos=0,properties=properties)
+                _logger.error(f"{e}")
+
 
     parts = topic.split("/")
     payload_decoded = payload.decode()
@@ -187,7 +254,7 @@ async def message(client, topic, payload, qos, properties):
     # Temperature and Humidity Example
     if parts[-1] == "temperature":
         try:
-            temperature, humidity = extract_temp_humidity(payload_decoded)
+            temperature, humidity = await extract_temp_humidity(payload_decoded)
             await store_readings(temperature, humidity, parts[-3], parts[-2])
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -198,8 +265,8 @@ async def message(client, topic, payload, qos, properties):
 
     # Doors Pin Example
     elif parts[-1] == "pin":
-        # await pin(payload_decoded, parts[-2])
-        pass
+        await handle_pin(payload_decoded, parts[-2])
+        
 
 
 @mqtt.on_subscribe()
@@ -255,7 +322,12 @@ async def create_sample_data(session: AsyncSession = Depends(get_session)):
         # Door control
         sample_door = Door(name="Front Door", access_code="12345")
         sample_device2 = Device(name="Door controller")
-        sample_sensor2 = Sensor(name="Door sensor", device=sample_device2, door=sample_door)
+        sample_sensor2 = Sensor(name="Door key card", device=sample_device2, door=sample_door)
+        sample_sensor3 = Sensor(name="Door pin", device=sample_device2, door=sample_door)
+
+        sample_door2 = Door(name="Front Door", access_code="12345")
+        sample_device3 = Device(name="Door controller wifi")
+        sample_sensor4 = Sensor(name="Door key card", device=sample_device3, door=sample_door2)
 
         # Create sample readings
         temp_reading = Reading(value_type=temp_value_type, sensor=sample_sensor, value="22")
@@ -282,7 +354,7 @@ async def create_sample_data(session: AsyncSession = Depends(get_session)):
         session.add_all([
             temp_value_type, humidity_value_type, sample_device, sample_door, sample_sensor,
             temp_reading, humidity_reading, sample_alarm, sample_employee, sample_guest,
-            sample_key_fob_employee,sample_key_fob_guest, sample_entry_log,sample_sensor2,sample_device2
+            sample_key_fob_employee,sample_key_fob_guest, sample_entry_log,sample_sensor2,sample_device2,sample_sensor3,sample_sensor4
         ])
         await session.commit()
 
@@ -305,6 +377,7 @@ async def get_all(session: AsyncSession = Depends(get_session)):
     valuetype = await session.execute(select(ValueType))
     guest = await session.execute(select(Guest))
     keyfob = await session.execute(select(KeyFob))
+    door = await session.execute(select(Door))
 
     return {
         "reading" : reading.scalars().all(),
@@ -316,50 +389,38 @@ async def get_all(session: AsyncSession = Depends(get_session)):
         "valuetype" : valuetype.scalars().all(),
         "guest" : guest.scalars().all(),
         "keyfob" : keyfob.scalars().all(),
+        "door" : door.scalars().all(),
     }
 
+
+@app.get("/get_temp")
+async def get_temp(amount : int ,session: AsyncSession = Depends(get_session)):
+    reading = await session.execute(select(Reading).where(Reading.value_type_id == 1).order_by(Reading.id).fetch(amount))
     
-
-@app.post("/create-device", status_code=status.HTTP_200_OK)
-async def create_device(device_data: DeviceCreate, session: AsyncSession = Depends(get_session)):
-    device = Device(name=device_data.name)
-    sensor = Sensor(name=device_data.sensor.name, device=device)
-    session.add(device)
-    session.add(sensor)
-    await session.commit()
-    return {"message": "Device with sensor created successfully", "device_id": device.id, "sensor_id": sensor.id}
-
-@app.post("/create-device-with-door", status_code=status.HTTP_200_OK)
-async def create_device_with_door(device_data: DeviceWithDoorCreate, session: AsyncSession = Depends(get_session)):
-    device = Device(name=device_data.name)
-    door = Door(name=device_data.door.name, access_code=device_data.door.access_code)
-    sensor = Sensor(name=device_data.sensor.name, device=device, door=door)
-    session.add(device)
-    session.add(door)
-    session.add(sensor)
-    await session.commit()
     return {
-        "message": "Device with sensor and door created successfully",
-        "device_id": device.id,
-        "sensor_id": sensor.id,
-        "door_id": door.id
+        "reading" : reading.scalars().all(),
     }
 
-@app.post("/create-sensor-with-door", status_code=status.HTTP_200_OK)
-async def create_sensor_with_door(sensor_data: SensorWithDoorCreate, session: AsyncSession = Depends(get_session)):
-    device = select(Device).where(Device.id == sensor_data.device_id)
-    result = await session.execute(device)
-    device = result.scalar_one_or_none()
-    if device is None: 
-        return status.HTTP_404_NOT_FOUND
+@app.get("/get_humid")
+async def get_humid(amount : int ,session: AsyncSession = Depends(get_session)):
+    reading = await session.execute(select(Reading).where(Reading.value_type_id == 2).order_by(Reading.id).fetch(amount))
     
-    door = Door(name=sensor_data.door.name, access_code=sensor_data.door.access_code)
-    sensor = Sensor(name=sensor_data.name, device=device, door=door)
-
-    session.add(door)
-    session.add(sensor)
-    await session.commit()
     return {
-        "sensor_id": sensor.id,
-        "door_id": door.id
+        "reading" : reading.scalars().all(),
+    }
+
+@app.get("/get_entry_logs")
+async def get_entry_logs(amount : int,  approved:bool,session: AsyncSession = Depends(get_session)):
+    logs = await session.execute(select(EntryLog).where(EntryLog.approved == approved).order_by(EntryLog.id).fetch(amount))
+    
+    return {
+        "logs" : logs.scalars().all(),
+    }
+
+@app.get("/get_alarm")
+async def get_alarm(amount : int,  is_acknowledged:bool,session: AsyncSession = Depends(get_session)):
+    alarm = await session.execute(select(Alarm).where(Alarm.is_acknowledged == is_acknowledged).order_by(Alarm.id).fetch(amount))
+    
+    return {
+        "logs" : alarm.scalars().all(),
     }
