@@ -7,7 +7,6 @@ WORKERS=1
 WORKER_CLASS=uvicorn.workers.UvicornWorker
 VENV=$DIR/.venv/bin/activate
 BIND_SUB=127.0.0.1:8000
-BIND_PUB=127.0.0.1:8080
 LOG_LEVEL=info
 
 cd $DIR

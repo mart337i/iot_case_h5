@@ -13,6 +13,8 @@ from schema.monitoring_schema import DeviceSchema, SensorSchema,SensorSchemaWith
 
 from database import engine, async_session
 
+
+from sqlalchemy import desc
 from datetime import datetime, timedelta
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,7 +58,7 @@ logging.basicConfig(filename='/home/sysadmin/code/iot_case_h5/app/logs/applicati
 _logger = logging.getLogger(__name__)
 
 #Application 
-app = FastAPI()
+app = FastAPI(root_path="/api",docs_url="/docs", redoc_url="/redoc")
 
 @app.on_event("startup")
 async def startup_event():
@@ -92,11 +94,6 @@ mqtt_config = MQTTConfig(
 mqtt = FastMQTT(config=mqtt_config)
 
 mqtt.init_app(app)
-
-root = "/mqtt/root" 
-temprature = f"{root}/room/+/+/temperature"
-doors_keycard = f"{root}/room/+/doors/keycard"
-doors_pin = f"{root}/room/+/doors/pin"
 
 @mqtt.on_connect()
 def connect(client, flags, rc, properties):
@@ -248,16 +245,11 @@ async def message(client, topic, payload, qos, properties):
         _logger.warning(f"return_address :: {return_address}, pin_code {pin_code}")
 
         if return_address is not None and pin_code is not None:
-            try:
-                access_granted = await verify_pin(sensor_id,pin_code)
-                await create_entry_log_pin(sensor_id,access_granted)
-                    
-                response_payload = b'1' if access_granted else b'0'
-                mqtt.client.publish(message_or_topic = return_address[0], payload = response_payload, qos=0,properties=properties)
-            except Exception as e:
-                response_payload = b'0'
-                mqtt.client.publish(message_or_topic = return_address[0], payload = response_payload, qos=0,properties=properties)
-                _logger.error(f"{e}")
+            access_granted = await verify_pin(sensor_id,pin_code)
+            await create_entry_log_pin(sensor_id,access_granted)
+                
+            response_payload = b'1' if access_granted else b'0'
+            mqtt.client.publish(message_or_topic = return_address[0], payload = response_payload, qos=0,properties=properties)
 
 
     parts = topic.split("/")
@@ -305,10 +297,10 @@ async def root():
                 <p class="lead text-center mb-5">Use the links below to navigate to the API documentation:</p>
                 <div class="row">
                     <div class="col-md-6 text-center mb-3">
-                        <a href="/docs" class="btn btn-primary btn-lg">Swagger UI Documentation</a>
+                        <a href="/api/redoc" class="btn btn-secondary btn-lg">ReDoc Documentation</a>
                     </div>
                     <div class="col-md-6 text-center mb-3">
-                        <a href="/redoc" class="btn btn-secondary btn-lg">ReDoc Documentation</a>
+                        <a href="/api/docs" class="btn btn-primary btn-lg">Swagger UI Documentation</a>
                     </div>
                 </div>
             </div>
@@ -408,7 +400,7 @@ async def get_all(session: AsyncSession = Depends(get_session)):
 
 @app.get("/get_temp")
 async def get_temp(amount : int ,session: AsyncSession = Depends(get_session)):
-    reading = await session.execute(select(Reading).where(Reading.value_type_id == 1).order_by(Reading.id).fetch(amount))
+    reading = await session.execute(select(Reading).where(Reading.value_type_id == 1).options(selectinload(Reading.sensor)).options(selectinload(Reading.value_type)).order_by(desc(Reading.created_date)).fetch(amount))
     
     return {
         "reading" : reading.scalars().all(),
@@ -416,15 +408,15 @@ async def get_temp(amount : int ,session: AsyncSession = Depends(get_session)):
 
 @app.get("/get_humid")
 async def get_humid(amount : int ,session: AsyncSession = Depends(get_session)):
-    reading = await session.execute(select(Reading).where(Reading.value_type_id == 2).order_by(Reading.id).fetch(amount))
-    
+    reading = await session.execute(select(Reading).where(Reading.value_type_id == 2).options(selectinload(Reading.sensor)).options(selectinload(Reading.value_type)).order_by(desc(Reading.created_date)).fetch(amount))
+
     return {
         "reading" : reading.scalars().all(),
     }
 
 @app.get("/get_entry_logs")
 async def get_entry_logs(amount : int,  approved:bool,session: AsyncSession = Depends(get_session)):
-    logs = await session.execute(select(EntryLog).where(EntryLog.approved == approved).order_by(EntryLog.id).fetch(amount))
+    logs = await session.execute(select(EntryLog).where(EntryLog.approved == approved).options(selectinload(EntryLog.sensor)).order_by(desc(EntryLog.created_date)).fetch(amount))
     
     return {
         "logs" : logs.scalars().all(),
@@ -432,10 +424,10 @@ async def get_entry_logs(amount : int,  approved:bool,session: AsyncSession = De
 
 @app.get("/get_alarm")
 async def get_alarm(amount : int,  is_acknowledged:bool,session: AsyncSession = Depends(get_session)):
-    alarm = await session.execute(select(Alarm).where(Alarm.is_acknowledged == is_acknowledged).order_by(Alarm.id).fetch(amount))
+    alarm = await session.execute(select(Alarm).where(Alarm.is_acknowledged == is_acknowledged).options(selectinload(Alarm.sensor)).order_by(desc(Alarm.created_date)).fetch(amount))
     
     return {
-        "logs" : alarm.scalars().all(),
+        "alarm" : alarm.scalars().all(),
     }
 
 # Define endpoint to create a device
