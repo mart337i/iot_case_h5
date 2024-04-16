@@ -20,6 +20,7 @@ from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
+from fastapi.middleware.cors import CORSMiddleware
 
 import os
 from dotenv import load_dotenv
@@ -59,6 +60,14 @@ _logger = logging.getLogger(__name__)
 
 #Application 
 app = FastAPI(root_path="/api",docs_url="/docs", redoc_url="/redoc")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.on_event("startup")
 async def startup_event():
@@ -147,6 +156,9 @@ async def message(client, topic, payload, qos, properties):
             stmt = select(KeyFob).where(KeyFob.key == keycard_code, KeyFob.valid_until >= datetime.utcnow())
             result = await session.execute(stmt)
             keyfob = result.scalars().all()
+            if not keyfob:
+                _logger.warning(f"Error with {keyfob}")
+                return None , False  # Error   
             keyfob = keyfob[0]
             _logger.warning(f"keyfob found: {keyfob}")
 
@@ -428,6 +440,25 @@ async def get_alarm(amount : int,  is_acknowledged:bool,session: AsyncSession = 
     
     return {
         "alarm" : alarm.scalars().all(),
+    }
+
+
+@app.get("/get_all_basic")
+async def get_all_basic(session: AsyncSession = Depends(get_session)):
+    device = await session.execute(select(Device))
+    sensor = await session.execute(select(Sensor))
+    employee = await session.execute(select(Employee))
+    guest = await session.execute(select(Guest))
+    keyfob = await session.execute(select(KeyFob))
+    door = await session.execute(select(Door))
+
+    return {
+        "device" : device.scalars().all(),
+        "sensor" : sensor.scalars().all(),
+        "employee" : employee.scalars().all(),
+        "guest" : guest.scalars().all(),
+        "keyfob" : keyfob.scalars().all(),
+        "door" : door.scalars().all(),
     }
 
 # Define endpoint to create a device
