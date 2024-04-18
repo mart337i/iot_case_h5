@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse
 from models.monitoring import (Base,Device, Sensor, Door, Reading, ValueType,
     Alarm, Employee, Guest, KeyFob, EntryLog)
 
-from schema.monitoring_schema import DeviceSchema, SensorSchema,SensorSchemaWithoutDoor ,DoorSchema
+from schema.monitoring_schema import DeviceSchema, SensorSchema,SensorSchemaWithoutDoor ,DoorSchema, KeyFobSchema,GuestSchema,EmployeeSchema
 
 from database import engine, async_session
 
@@ -153,7 +153,7 @@ async def message(client, topic, payload, qos, properties):
         Verifies that the keyfob exists and matches the door's access code.
         """
         async with async_session() as session:
-            stmt = select(KeyFob).where(KeyFob.key == keycard_code, KeyFob.valid_until >= datetime.utcnow())
+            stmt = select(KeyFob).where(KeyFob.key == keycard_code)
             result = await session.execute(stmt)
             keyfob = result.scalars().all()
             if not keyfob:
@@ -500,3 +500,79 @@ async def create_sensor_without_door(sensor: SensorSchemaWithoutDoor, session: A
     session.add(new_sensor)
     await session.commit()
     return new_sensor
+
+
+@app.post("/employees/")
+async def create_employee(employee: EmployeeSchema, session: AsyncSession = Depends(get_session)):
+    employee_data = employee.dict()
+    employee_name = employee_data.get("name")
+    phonenumber = employee_data.get("phonenumber")
+    key_fob_dict = employee_data.get("key_fob")
+    _logger.warning(f"key_fob_dict {key_fob_dict} , all {employee}")
+
+    new_employee = Employee(name=employee_name, phonenumber=phonenumber)
+    key_fob_employee = KeyFob(is_active=key_fob_dict['is_active'],key=key_fob_dict['key'])
+    # Link employee and guest to key fob
+    new_employee.key_fob = key_fob_employee
+
+    session.add_all([
+        new_employee,key_fob_employee
+    ])
+    await session.commit()
+    return {"message": "Employee created"}
+
+@app.post("/guests/")
+async def create_guest(guest: GuestSchema, session: AsyncSession = Depends(get_session)):
+    guest_data = guest.dict()
+    guest_name = guest_data.get("name")
+    key_fob_dict = guest_data.get("key_fob")
+
+    new_guest = Guest(name=guest_name)
+    key_fob = KeyFob(is_active=key_fob_dict['is_active'],key=key_fob_dict['key'])
+
+    new_guest.key_fob_id = key_fob
+    session.add(new_guest)
+
+    session.add_all([
+        new_guest,key_fob
+    ])
+    await session.commit()
+    return {"message": "Guest created"}
+
+@app.post("/keyfobs/")
+async def create_keyfob(keyfob: KeyFobSchema, session: AsyncSession = Depends(get_session)):
+    keyfob_data = keyfob.dict()
+    is_active = keyfob_data.get("is_active")
+    key = keyfob_data.get("key")
+    valid_until = keyfob_data.get("valid_until")
+    new_keyfob = KeyFob(is_active=is_active, key=key, valid_until=valid_until)
+    session.add(new_keyfob)
+    await session.commit()
+    return new_keyfob
+
+@app.put("/employees/{employee_id}/update-keyfob/")
+async def update_employee_keyfob(employee_id: int, key_fob_id: int, session: AsyncSession = Depends(get_session)):
+    async with session.begin():
+        # Retrieve the employee from the database
+        employee = await session.get(Employee, employee_id)
+        if not employee:
+            raise HTTPException(status_code=404, detail="Employee not found")
+        
+        # Update the key_fob_id
+        employee.key_fob_id = key_fob_id
+
+    return employee
+
+
+@app.put("/guests/{guest_id}/update-keyfob/")
+async def update_guest_keyfob(guest_id: int, key_fob_id: int, session: AsyncSession = Depends(get_session)):
+    async with session.begin():
+        # Retrieve the guest from the database
+        guest = await session.get(Guest, guest_id)
+        if not guest:
+            raise HTTPException(status_code=404, detail="Guest not found")
+        
+        # Update the key_fob_id
+        guest.key_fob_id = key_fob_id
+
+    return guest

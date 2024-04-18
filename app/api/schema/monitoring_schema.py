@@ -31,3 +31,18 @@ class DoorSchema(BaseModel):
 
     class Config:
         orm_mode = True
+
+class KeyFobSchema(BaseModel):
+    is_active: bool
+    key: str
+    # valid_until: Optional[datetime]
+
+class EmployeeSchema(BaseModel):
+    name: str
+    phonenumber: str
+    key_fob: KeyFobSchema
+
+class GuestSchema(BaseModel):
+    name: str
+    key_fob: KeyFobSchema
+
