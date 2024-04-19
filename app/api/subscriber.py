@@ -12,9 +12,10 @@ from models.monitoring import (Base,Device, Sensor, Door, Reading, ValueType,
 from schema.monitoring_schema import DeviceSchema, SensorSchema,SensorSchemaWithoutDoor ,DoorSchema, KeyFobSchema,GuestSchema,EmployeeSchema
 
 from database import engine, async_session
+from datetime import date
 
 
-from sqlalchemy import desc
+from sqlalchemy import desc, func,and_,cast,Float
 from datetime import datetime, timedelta
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -418,10 +419,31 @@ async def get_temp(amount : int ,session: AsyncSession = Depends(get_session)):
         "reading" : reading.scalars().all(),
     }
 
+@app.get("/get_temp_from_to")
+async def get_temp_from_to(date_from : date,date_to : date ,session: AsyncSession = Depends(get_session)):
+  
+
+    result = await session.execute(
+        select(func.avg(cast(Reading.value, Float)).label('average'))
+        .where(and_(Reading.value_type_id == 1, Reading.created_date <= date_to, Reading.created_date >= date_from))
+    )
+    avg_value = result.scalar_one()
+    return {"average": avg_value}
+
+
+@app.get("/get_temp_from_to_datetime")
+async def get_temp_from_to_datetime(date_from : datetime,date_to : datetime ,session: AsyncSession = Depends(get_session)):
+
+    result = await session.execute(
+        select(func.avg(cast(Reading.value, Float)).label('average'))
+        .where(and_(Reading.value_type_id == 1, Reading.created_date <= date_to, Reading.created_date >= date_from))
+    )
+    avg_value = result.scalar_one()
+    return {"average": avg_value}
+
 @app.get("/get_humid")
 async def get_humid(amount : int ,session: AsyncSession = Depends(get_session)):
     reading = await session.execute(select(Reading).where(Reading.value_type_id == 2).options(selectinload(Reading.sensor)).options(selectinload(Reading.value_type)).order_by(desc(Reading.created_date)).fetch(amount))
-
     return {
         "reading" : reading.scalars().all(),
     }
